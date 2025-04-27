@@ -4,7 +4,9 @@
 #include <cassert>
 #include <Eigen/Core>
 #include <Eigen/SparseCore>
+#include <Eigen/Dense>
 #include <Eigen/IterativeLinearSolvers>
+#include <unsupported/Eigen/IterativeSolvers>
 
 #include "CompressedSpMV.hh"
 
@@ -13,7 +15,9 @@ struct InteriorPointParams {
   int MaxIteration = 1000;
   TMat::Scalar GradTolerance = 1e-5;
   TMat::Scalar EqnTolerance = 1e-6;
-  TMat::Scalar CentralPathTau = 0.5;
+  TMat::Scalar KKTCondSigma = 0.95;
+  TMat::Scalar CentralPathTau = 0.01;
+  TMat::Scalar CentralPathRho = 0.3;
 };
 
 /**
@@ -27,6 +31,7 @@ class PrimalDualInteriorPoint {
   using ColVec = Eigen::VectorXd;
   using RowVec = Eigen::RowVectorXd;
   using Index = AMat::StorageIndex;
+
 public:
   PrimalDualInteriorPoint(EqnMat* mat_Eqn_ptr, 
                           const ColVec* vec_B_ptr, 
@@ -42,27 +47,64 @@ public:
   {
     assert(vec_B_ptr->size() == rhs_dim
            && "RHS/Matrix have inconsist sizes"); 
-    assert(vec_B_ptr->size() == prob_dim
+    assert(vec_C_ptr->size() == prob_dim
            && "RHS/Matrix have inconsist sizes"); 
   }
 
-  void SolveInPlace(ColVec& var, ColVec& dual, 
-                    Scalar overall_tol=1e-5, Scalar eqn_tol=1e-6) {
+  int SolveInPlace(ColVec& var, ColVec& dual, 
+                    Scalar overall_tol=1e-5) {
+    using std::cout, std::endl;
     assert(var.size() == prob_dim && "Var/Matrix have inconsist sizes");
     assert(dual.size() == rhs_dim && "Dual/Matrix have inconsist sizes");
 
     ColVec slack = *pvec_C - pmat_A->transpose().operator*(dual);
 
     ColVec d_primal(prob_dim);
-    ColVec d_dual(prob_dim);
+    ColVec d_dual(rhs_dim);
+    ColVec d_slack(prob_dim);
+    ColVec rhs_dual(rhs_dim);
     int iteration = 0;
+    Scalar curr_mu = var.dot(slack) / prob_dim;
+
     do {
+      cout << "Iter #" << iteration << "\t";
       ColVec r_primal = (*pvec_B) - (*pmat_A) * var;
+      ColVec r_dual = (*pvec_C) - slack - pmat_A->transpose().operator*(dual);
+      ColVec r_comp = 
+        params.KKTCondSigma * curr_mu * ColVec::Ones(prob_dim) - var.cwiseProduct(slack);
+
+      rhs_dual = r_primal + pmat_A->operator*(
+        (var.cwiseProduct(r_dual) - r_comp).cwiseQuotient(slack)
+      );
+
+      Eigen::ConjugateGradient<EqnMat, Eigen::Lower|Eigen::Upper, Eigen::IdentityPreconditioner> cg;
+      cg.compute(*pmat_Eqn);
+      d_dual = cg.solve(rhs_dual);
+
+      d_slack = r_dual - pmat_A->transpose().operator*(d_dual);
+      d_primal = (r_comp - var.cwiseProduct(d_slack)).cwiseQuotient(slack);
+
+      Scalar alpha = params.CentralPathRho;
+      while (true) {
+        ColVec nxt_primal = var + d_primal * alpha;
+        ColVec nxt_slack = slack + d_slack * alpha;
+        if (
+          ((nxt_primal.cwiseProduct(nxt_slack)).array() 
+            >= params.CentralPathTau * curr_mu).all()
+          && (nxt_primal.array() >= 0).all()
+          && (nxt_slack.array() >= 0).all()
+        ) { break; }
+        alpha = alpha * params.CentralPathRho;
+      }
       
-      
+      cout << "alpha " << alpha << "\t" << "delta " << d_primal.squaredNorm() << endl;
+      var += alpha * d_primal;
+      dual += alpha * d_dual;
+      slack += alpha * d_slack;
 
     } while (++iteration <= params.MaxIteration
              && d_primal.squaredNorm() > params.GradTolerance );
+    return iteration;
   }
   
   Index fullDim() const { return 2*prob_dim + rhs_dim; }

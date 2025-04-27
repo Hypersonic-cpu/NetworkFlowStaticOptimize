@@ -23,7 +23,7 @@ namespace Eigen {
 }
 
 
-struct PrimalMatrix : public Eigen::EigenBase<PrimalMatrix> {
+class PrimalMatrix : public Eigen::EigenBase<PrimalMatrix> {
 public:
   using Scalar = double;
   using RealScalar = double;
@@ -65,12 +65,12 @@ public:
    
     auto size_X = size_M * size_Q;
     auto vec_X = x.segment(1, size_X);
-    const auto& mat_X = vec_X.reshaped<Eigen::ColMajor>(size_M, size_Q);
+    const auto& mat_X = vec_X.template reshaped<Eigen::ColMajor>(size_M, size_Q);
     const auto& vec_R = x.segment(size_X + 1, size_X); // Slack matrix for X <= 1.
     const auto& vec_S = x.segment(size_X * 2 + 1, size_M);
 
     auto size_O = size_N * size_Q;
-    r.segment(0, size_O) = ((*pmat_M) * mat_X).reshape<Eigen::ColMajor>(size_N * size_Q, 1);
+    r.segment(0, size_O) = ((*pmat_M) * mat_X).template reshape<Eigen::ColMajor>(size_N * size_Q, 1);
     r.segment(size_O, size_X) = vec_X + vec_R;
     r.segment(size_O + size_X, size_M) = 
       x(0) * (*pvec_C) + mat_X * (*pvec_VQ) + vec_S;
@@ -84,7 +84,7 @@ public:
     auto size_Y = size_N * size_Q;
     auto size_O = size_M * size_Q;
     const auto& vec_Y = y.segment(0, size_Y);
-    const auto& mat_Y = vec_Y.reshaped<Eigen::ColMajor>(size_M, size_Q);
+    const auto& mat_Y = vec_Y.template reshaped<Eigen::ColMajor>(size_M, size_Q);
     const auto& vec_L = y.segment(size_Y + size_O, size_M);
 
     r(0) = (*pvec_C).dot(y.segment(size_O + size_Y, size_M));
@@ -114,7 +114,7 @@ private:
 };
 
 /**
- * @brief The matrix `AS^{-1}XA^T` for solving delta_y 
+ * @brief The matrix `AS^{-1}XA^T` for solving delta_dual 
  * in primal-dual IPM.
  */
 class PDIPMSubMatrix: public Eigen::EigenBase<PDIPMSubMatrix> {
@@ -131,16 +131,16 @@ public:
 
   PDIPMSubMatrix(const PrimalMatrix* pmat_A,
               Eigen::VectorXd* pvec_V,
-              Eigen::VectorXd* pvec_L )
+              Eigen::VectorXd* pvec_S )
     : pmat_A{ pmat_A }, 
       pvec_V{ pvec_V }, 
-      pvec_L{ pvec_L },
+      pvec_S{ pvec_S },
       row_A{ pmat_A->rows() },
       len_V{ pmat_A->cols() },
       is_transposed{ false }
   { 
-    assert(pvec_L->size() == pvec_L->size() && "Vector V/L size inconsist");
-    assert(pmat_A->cols() == pvec_L->size() && "Vector/Matrix size inconsist");
+    assert(pvec_S->size() == pvec_V->size() && "Vector V/S size inconsist");
+    assert(pmat_A->cols() == pvec_S->size() && "Vector/Matrix size inconsist");
   }
 
   Eigen::Index rows() const { return row_A; }
@@ -162,7 +162,8 @@ public:
     Eigen::VectorXd temp_res(len_V);
     pmat_A->applyThisOnTheRight(temp_res, x);
     pmat_A->applyThisOnTheLeft(
-      r, temp_res.cwiseProduct((pvec_V->array() / pvec_L->array()).matrix()));
+      r, temp_res.cwiseProduct(pvec_V->cwiseQuotient(*pvec_S))
+    );
   }
 
   template<typename Rhs, typename Dest>
@@ -183,7 +184,7 @@ public:
 private:
   const PrimalMatrix* pmat_A;
   Eigen::VectorXd* pvec_V;
-  Eigen::VectorXd* pvec_L;
+  Eigen::VectorXd* pvec_S;
   const Index row_A;
   const Index len_V; // Equals to col_A. 
   bool is_transposed;

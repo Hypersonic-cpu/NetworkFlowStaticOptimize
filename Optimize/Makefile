@@ -1,6 +1,6 @@
 # Compiler and flags
 CXX 		:=g++-14
-CXXFLAGS 	:=-std=c++2c -Wall -Wextra -Werror -pedantic -g #
+CXXFLAGS 	:=-std=c++2c -Wall -Wextra  -pedantic -g #
 EIGEN_PATH 	:=../../../CommonMathLib/eigen-3.4.0#
 CXXFLAGS 	+= -I$(EIGEN_PATH)
 LDFLAGS =#

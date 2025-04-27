@@ -1,67 +1,122 @@
 #include <iostream>
+#include <string>
+#include <fstream>
+#include <sstream>
 #include <vector>
 #include <cassert>
+#include <iomanip>
 #include <Eigen/Core>
 #include <Eigen/SparseCore>
 #include <Eigen/IterativeLinearSolvers>
 
 #include "CompressedSpMV.hh"
+#include "PrimalDualInteriorPoint.hh"
+
+using Tri = Eigen::Triplet<double>;
+
+std::pair<
+  std::vector<Tri>,
+  std::vector<double> >
+ReadEdge(std::string fileName, const int EdgeNum, bool is_OD) {
+  std::vector<Tri> edges {};
+  std::vector<double> cap {};
+  edges.reserve(EdgeNum << 1);
+  cap.reserve(EdgeNum); 
+
+  std::ifstream file(fileName);
+  std::string line;
+
+  // Skip the header row
+  std::getline(file, line);
+
+  // Process each data row
+  int cnt = 0;
+  while (std::getline(file, line)) {
+    int from, to;
+    double caps, bkg;
+    std::istringstream ss(line);
+    ss >> from >> to ;
+    edges.emplace_back(Tri{ cnt, from-1, 1.0});
+    edges.emplace_back(Tri{ cnt, to-1, -1.0});
+    if (is_OD) {
+      ss >> caps;
+      cap.emplace_back(caps);
+    } else {
+      ss >> caps >> bkg;
+      cap.emplace_back(caps - bkg);
+    }
+    cnt++;
+  }
+  
+  assert(cnt == EdgeNum);
+  return std::make_pair(edges, cap);
+}
 
 int main()
 {
-  // 1. Define the dimensions
-  Eigen::Index n = 5;
-  Eigen::Index m = 3;
+  using Eigen::VectorXd;
+  using std::cout, std::endl;
 
-  // 2. Create the sparse matrices A (n x n) and B (m x m)
-  Eigen::SparseMatrix<double> A(n, n);
-  Eigen::SparseMatrix<double> B(m, m);
-  Eigen::VectorXd vv;
-  vv.segment(0, 1);
+  const int Node = 15;
+  const int Edge = 32;
+  const int ODmd = 10;
 
-  std::vector<Eigen::Triplet<double>> A_triplets;
-  std::vector<Eigen::Triplet<double>> B_triplets;
-  // Fill with slightly varying diagonal values for a non-trivial example
-  for(Eigen::Index i=0; i<n; ++i) A_triplets.push_back(Eigen::Triplet<double>(i, i, 2.0 + i * 0.1));
-  for(Eigen::Index i=0; i<m; ++i) B_triplets.push_back(Eigen::Triplet<double>(i, i, 3.0 + i * 0.2));
+  auto [edgesTri, edgesCap] = ReadEdge("../DataTest/Edges.ssv", Edge, false);
+  auto [odTri, odCap] = ReadEdge("../DataTest/OD_Demand.ssv", ODmd, true);
+  Eigen::SparseMatrix<double> EdgesMat (Edge, Node);
+  EdgesMat.setFromTriplets(edgesTri.begin(), edgesTri.end());
 
-  A.setFromTriplets(A_triplets.begin(), A_triplets.end());
-  B.setFromTriplets(B_triplets.begin(), B_triplets.end());
-  A.makeCompressed(); // Good practice for sparse matrix performance
-  B.makeCompressed(); // Good practice for sparse matrix performance
+  Eigen::SparseMatrix<double> ODMat (ODmd, Node);
+  ODMat.setFromTriplets(odTri.begin(), odTri.end());
 
-  std::cout << "Matrix A (sparse " << A.rows() << "x" << A.cols() << "):\n" << A << std::endl;
-  std::cout << "Matrix B (sparse " << B.rows() << "x" << B.cols() << "):\n" << B << std::endl;
+  Eigen::VectorXd EdgesCap = Eigen::VectorXd::Map(edgesCap.data(), edgesCap.size()).eval();
+  Eigen::VectorXd ODCap = Eigen::VectorXd::Map(odCap.data(), odCap.size()).eval();
 
-  // 3. Create the MyMatrix wrapper object Q
-  MyMatrix Q(&A, &B);
+  cout << std::setw(4) << "Cap"; cout << "|";
+  for (auto j = 0; j < Node; ++j)
+    cout << std::setw(4) << j;
+  cout << endl << endl;
 
-  std::cout << "Matrix Q dimensions (matrix-free): " << Q.rows() << "x" << Q.cols() << std::endl;
-
-  Eigen::VectorXd b(n+m), x;
-  
-  for (Eigen::Index i = 0; i < n+m; ++i) {
-    b(i) = 1;
+  for (auto i = 0; i < Edge; ++i) {
+    cout << std::setw(4) << edgesCap.at(i);
+    cout << "|";
+    for (auto j = 0; j < Node; ++j)
+      cout << std::setw(4) << EdgesMat.coeff(i, j);
+    cout << endl;
   }
- 
-  Eigen::VectorXd prod = Q * b;
+  cout << endl << endl;
 
-  std::cout << prod << std::endl;
-  
-  b.setRandom();
- 
-  // Solve Ax = b using various iterative solver with matrix-free version:
-  {
-    Eigen::ConjugateGradient<MatrixReplacement, Eigen::Lower|Eigen::Upper, Eigen::IdentityPreconditioner> cg;
-    cg.compute(Q);
-    x = cg.solve(b);
-    std::cout << "CG:       #iterations: " << cg.iterations() << ", estimated error: " << cg.error() << std::endl;
+  cout << std::setw(4) << "OD"; cout << "|";
+  for (auto j = 0; j < Node; ++j)
+    cout << std::setw(4) << j;
+  cout << endl << endl;
+
+  for (auto i = 0; i < ODmd; ++i) {
+    cout << std::setw(4) << odCap.at(i);
+    cout << "|";
+    for (auto j = 0; j < Node; ++j)
+      cout << std::setw(4) << ODMat.coeff(i, j);
+    cout << endl;
   }
- 
-  // {
-  //   Eigen::BiCGSTAB<MatrixReplacement, Eigen::IdentityPreconditioner> bicg;
-  //   bicg.compute(A);
-  //   x = bicg.solve(b);
-  //   std::cout << "BiCGSTAB: #iterations: " << bicg.iterations() << ", estimated error: " << bicg.error() << std::endl;
-  // }
+  cout << endl;
+
+  PrimalMatrix matrix_A { ODmd, Node, Edge, &EdgesMat, &EdgesCap, &ODCap };
+  VectorXd primalV (matrix_A.cols());
+  VectorXd dualY   (matrix_A.rows());
+  VectorXd slackS  (matrix_A.cols());
+  PDIPMSubMatrix matrix_Sub { &matrix_A, &primalV, &slackS };
+  VectorXd costC = VectorXd::Zero(matrix_A.cols());
+  { costC(0) = 1; }
+  VectorXd rhsB  = VectorXd::Zero(matrix_A.rows());
+
+  cout << "Dimension Check: " << endl;
+  cout << "Q " << ODmd << "\tM " << Edge << "\tN " << Node << endl;
+  cout << "MatA Size " << matrix_A.rows() << " x " << matrix_A.cols() << "\tShould be " 
+       << (Edge + Node) * ODmd + Edge << " x " << 1 + (2 * ODmd + 1) * Edge << endl;
+  cout << "MatSub    " << matrix_Sub.rows() << " x " << matrix_Sub.cols() << "\tShould be " 
+       << matrix_A.rows() << " square" << endl;
+  
+  InteriorPointParams<PDIPMSubMatrix> p;
+  PrimalDualInteriorPoint ipm { matrix_Sub, nullptr, ;
+  
 }
