@@ -1,3 +1,5 @@
+#pragma once 
+
 #include <iostream>
 #include <vector>
 #include <cassert>
@@ -34,9 +36,9 @@ struct PrimalMatrix {
    
     auto size_X = size_M * size_Q;
     auto vec_X = x.segment(1, size_X);
-    auto mat_X = vec_X.reshaped<Eigen::ColMajor>(size_M, size_Q);
-    auto vec_R = x.segment(size_X + 1, size_X); // Slack matrix for X <= 1.
-    auto vec_S = x.segment(size_X * 2 + 1, size_M);
+    const auto& mat_X = vec_X.reshaped<Eigen::ColMajor>(size_M, size_Q);
+    const auto& vec_R = x.segment(size_X + 1, size_X); // Slack matrix for X <= 1.
+    const auto& vec_S = x.segment(size_X * 2 + 1, size_M);
 
     auto size_O = size_N * size_Q;
     r.segment(0, size_O) = ((*pmat_M) * mat_X).reshape<Eigen::ColMajor>(size_N * size_Q, 1);
@@ -52,9 +54,9 @@ struct PrimalMatrix {
 
     auto size_Y = size_N * size_Q;
     auto size_O = size_M * size_Q;
-    auto vec_Y = y.segment(0, size_Y);
-    auto mat_Y = vec_Y.reshaped<Eigen::ColMajor>(size_M, size_Q);
-    auto vec_L = y.segment(size_Y + size_O, size_M);
+    const auto& vec_Y = y.segment(0, size_Y);
+    const auto& mat_Y = vec_Y.reshaped<Eigen::ColMajor>(size_M, size_Q);
+    const auto& vec_L = y.segment(size_Y + size_O, size_M);
 
     r(0) = (*pvec_C).dot(y.segment(size_O + size_Y, size_M));
     r.segment(1, size_O) =(*pmat_M).transpose() * mat_Y + y.segment(size_Y, size_O);
@@ -89,49 +91,68 @@ public:
       IsRowMajor = false
   };
 
-  PDIPMMatrix(const PrimalMatrix* pmat_A)
+  PDIPMMatrix(const PrimalMatrix* pmat_A,
+              Eigen::VectorXd* pvec_V,
+              Eigen::VectorXd* pvec_L )
     : pmat_A{ pmat_A }, 
+      pvec_V{ pvec_V }, 
+      pvec_L{ pvec_L },
       row_A{ pmat_A->rows() },
-      len_X{ pmat_A->cols() }
-  { }
+      len_V{ pmat_A->cols() }
+  { 
+    assert(pvec_L->size() == pvec_L->size() && "Vector V/L size inconsist");
+    assert(pmat_A->cols() == pvec_L->size() && "Vector/Matrix size inconsist");
+  }
 
-  Eigen::Index rows() const { return row_A + 2 * len_X; }
-  Eigen::Index cols() const { return row_A + 2 * len_X; }
+  Eigen::Index rows() const { return row_A + 2 * len_V; }
+  Eigen::Index cols() const { return row_A + 2 * len_V; }
 
   // --- Matrix-vector product ---
   template<typename Rhs>
-  Eigen::Product<PDIPMMatrix,Rhs,Eigen::AliasFreeProduct> operator*(const Eigen::MatrixBase<Rhs>& x) const {
+  Eigen::Product<PDIPMMatrix,Rhs,Eigen::AliasFreeProduct> 
+  operator*(const Eigen::MatrixBase<Rhs>& x) const {
     return Eigen::Product<PDIPMMatrix, Rhs, Eigen::AliasFreeProduct>(*this, x.derived());
   }
 
   // --- Multiplication Implementation ---
   template<typename Rhs, typename Dest>
-  void applyThisOnTheLeft(Dest& y, const Rhs& x) const {
+  void applyThisOnTheLeft(Dest& r, const Rhs& x) const {
     assert(x.size() == this->cols() && "Input vector x has incorrect size for perform_op");
-    assert(y.size() == this->rows() && "Output vector y has incorrect size for perform_op");
+    assert(r.size() == this->rows() && "Output vector r has incorrect size for perform_op");
 
-    auto dvec_V = x.segment(0, len_X);
-    auto dvec_W = x.segment(len_X, row_A);
-    auto dvec_L = x.segment(len_X + row_A, len_X);
+    const auto& dvec_V = x.segment(0, len_V);
+    const auto& dvec_W = x.segment(len_V, row_A);
+    const auto& dvec_L = x.segment(len_V + row_A, len_V);
 
     pmat_A->applyThisOnTheLeft(y.segment(0, row_A), dvec_V);
-    pmat_A->applyThisOnTheRight(y.segment(row_A, len_X), dvec_W);
-    y.segment(row_A, len_X) += dvec_L;
+    pmat_A->applyThisOnTheRight(y.segment(row_A, len_V), dvec_W);
+    r.segment(row_A, len_V) += dvec_L;
 
-    y.segment(row_A + len_X, len_X) = 
-      dvec_L.cwiseProduct(dvec_V) + (*pvec_X).cwiseProduct(dvec_L); 
+    r.segment(row_A + len_V, len_V) = 
+      pvec_L->cwiseProduct(dvec_V) + pvec_X->cwiseProduct(dvec_L); 
   }
 
   template<typename Rhs, typename Dest>
-  void applyThisOnTheRight(Dest& y, const Rhs& x) const {
-    assert(false && "Not implemented");
+  void applyThisOnTheRight(Dest& r, const Rhs& y) const {
+    assert(y.size() == this->rows() && "Input vector y has incorrect size for perform_op");
+    assert(r.size() == this->cols() && "Output vector r has incorrect size for perform_op");
+
+    const auto& dvec_U = y.segment(0, row_A);
+    const auto& dvec_M = y.segment(row_A, len_V);
+    const auto& dvec_D = y.segment(len_V + row_A, len_V);
+ 
+    pmat_A->applyThisOnTheRight(r.segment(0, len_V), dvec_U);
+    pmat_A->applyThisOnTheLeft(r.segment(len_V, row_A), dvec_M);
+    r.segment(0, len_V) += pvec_L->cwiseProduct(dvec_D);
+    r.segment(len_V + row_A, len_V) += dvec_M + pvec_V->cwiseProduct(dvec_D);
   }
 
 private:
   const PrimalMatrix* pmat_A;
-  const Eigen::VectorXd* pvec_V;
+  Eigen::VectorXd* pvec_V;
+  Eigen::VectorXd* pvec_L;
   const Index row_A;
-  const Index len_X; // Equals to col_A. 
+  const Index len_V; // Equals to col_A. 
 };
 
 // --- Specialization for Eigen's Product mechanism ---
@@ -153,7 +174,9 @@ struct generic_product_impl<PDIPMMatrix, Rhs, SparseShape, DenseShape> // Matrix
     assert(alpha==Scalar(1) && "scaling is not implemented");
     EIGEN_ONLY_USED_FOR_DEBUG(alpha);
     
-    lhs.applyThisOnTheLeft(dst, rhs);
+    Eigen::VectorXd temp_res(lhs.rows());
+    lhs.applyThisOnTheLeft(temp_res, rhs);
+    lhs.applyThisOnTheRight(dst, temp_res);
   }
 };
 
