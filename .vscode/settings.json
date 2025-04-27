@@ -1,0 +1,7 @@
+{
+    "files.associations": {
+        ".fantomasignore": "ignore",
+        "iterativelinearsolvers": "cpp",
+        "iterativesolvers": "cpp"
+    }
+}

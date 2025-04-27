@@ -1,0 +1,17 @@
+{
+    "configurations": [
+        {
+            "name": "Mac",
+            "includePath": [
+                "${workspaceFolder}/**",
+                "${workspaceFolder}/../../CommonMathLib/eigen-3.4.0/"
+            ],
+            "defines": [],
+            "cStandard": "c23",
+            "cppStandard": "c++23",
+            "compilerPath": "/usr/local/bin/g++-14",
+            "intelliSenseMode": "macos-gcc-x64"
+        }
+    ],
+    "version": 4
+}

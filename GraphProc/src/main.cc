@@ -13,7 +13,7 @@
 namespace stdv = std::views;
 
 auto
-ReadEdges(std::string filename, int const NumNodes) {
+ReadEdges(std::string filename) {
     std::ifstream file(filename);
     if (!file.is_open()) {
         std::cerr << "Failed to open file!" << std::endl;
@@ -21,7 +21,6 @@ ReadEdges(std::string filename, int const NumNodes) {
     }
     // [u, v, id]
     std::vector< std::tuple<int, int, int> > ret {};
-    ret.resize(NumNodes);
 
     std::string line; 
     // Skip the first line
@@ -58,18 +57,12 @@ int main(int argc, char* argv[]) {
     // int const T { std::atoi(argv[4]) };
     DirectedGraph g(N);
     using namespace std;
-
-    // std::vector< std::pair<int, int> > const edges {
-    //     {0, 1}, {0, 2}, {2, 3}, {1, 3}, {1, 4},
-    //     {3, 4}, {3, 5}, {4, 5}
-    // };
     
-    auto const edges{ ReadEdges(std::string(argv[2]), N) };
+    auto const edges{ ReadEdges(std::string(argv[2])) };
 
     for (auto [u, v, no] : edges) {
         cout << u << " " << v << " " << no << endl;
         g.at(u).emplace_back(DirectedEdge{ v, no });
-        // g.at(v).emplace_back(DirectedEdge{ u, no });
     }
 
     auto duration = chrono::microseconds(0);
@@ -83,7 +76,8 @@ int main(int argc, char* argv[]) {
 
         cout << "[" << Ter << "\t] ";
         for (auto elem: lst) {
-            std::cout << elem << " ";
+            auto [_, v, _] = edges[elem];
+            std::cout << elem << " p(" << v << ") ";
         }
         std::cout << std::endl;
     }
