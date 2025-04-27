@@ -10,14 +10,13 @@
 
 #include "CompressedSpMV.hh"
 
-template<typename TMat>
 struct InteriorPointParams {
   int MaxIteration = 1000;
-  TMat::Scalar GradTolerance = 1e-5;
-  TMat::Scalar EqnTolerance = 1e-6;
-  TMat::Scalar KKTCondSigma = 0.95;
-  TMat::Scalar CentralPathTau = 0.01;
-  TMat::Scalar CentralPathRho = 0.3;
+  double GradTolerance = 1e-5;
+  double EqnTolerance = 1e-6;
+  double KKTCondSigma = 0.95;
+  double CentralPathTau = 0.01;
+  double CentralPathRho = 0.3;
 };
 
 /**
@@ -36,7 +35,7 @@ public:
   PrimalDualInteriorPoint(EqnMat* mat_Eqn_ptr, 
                           const ColVec* vec_B_ptr, 
                           const ColVec* vec_C_ptr, 
-                          InteriorPointParams<AMat> params)
+                          InteriorPointParams params)
   : pmat_A{ mat_Eqn_ptr->rawPrimalMatrix() },
     pmat_Eqn{ mat_Eqn_ptr },
     pvec_B{ vec_B_ptr },
@@ -57,6 +56,8 @@ public:
     assert(var.size() == prob_dim && "Var/Matrix have inconsist sizes");
     assert(dual.size() == rhs_dim && "Dual/Matrix have inconsist sizes");
 
+    cout << "Invoking SolveInPlace" << endl;
+    cout << pvec_C->size() << " " << pmat_A->transpose().cols() << " " << dual.size() << endl;
     ColVec slack = *pvec_C - pmat_A->transpose().operator*(dual);
 
     ColVec d_primal(prob_dim);
@@ -64,10 +65,11 @@ public:
     ColVec d_slack(prob_dim);
     ColVec rhs_dual(rhs_dim);
     int iteration = 0;
+    cout << "Invoking SolveInPlace" << endl;
     Scalar curr_mu = var.dot(slack) / prob_dim;
 
     do {
-      cout << "Iter #" << iteration << "\t";
+      cout << "Iter #" << iteration << "\t" << endl;
       ColVec r_primal = (*pvec_B) - (*pmat_A) * var;
       ColVec r_dual = (*pvec_C) - slack - pmat_A->transpose().operator*(dual);
       ColVec r_comp = 
@@ -84,10 +86,16 @@ public:
       d_slack = r_dual - pmat_A->transpose().operator*(d_dual);
       d_primal = (r_comp - var.cwiseProduct(d_slack)).cwiseQuotient(slack);
 
+      cout << d_dual.transpose() << endl;
+      
       Scalar alpha = params.CentralPathRho;
       while (true) {
+        int a;
+        std::cin >> a;
         ColVec nxt_primal = var + d_primal * alpha;
         ColVec nxt_slack = slack + d_slack * alpha;
+        cout << alpha << " | " << nxt_primal.transpose() << endl;
+        cout << (nxt_primal.cwiseProduct(nxt_slack)).transpose() << endl;
         if (
           ((nxt_primal.cwiseProduct(nxt_slack)).array() 
             >= params.CentralPathTau * curr_mu).all()
@@ -112,7 +120,7 @@ public:
   Index rhsDim()  const { return rhs_dim; }
 
 private:
-  InteriorPointParams<AMat> params;
+  InteriorPointParams params;
   const Index prob_dim;
   const Index rhs_dim;
   const AMat* pmat_A;

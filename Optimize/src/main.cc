@@ -85,6 +85,7 @@ int main()
     cout << endl;
   }
   cout << endl << endl;
+  EdgesMat = EdgesMat.transpose().eval();
 
   cout << std::setw(4) << "OD"; cout << "|";
   for (auto j = 0; j < Node; ++j)
@@ -116,7 +117,10 @@ int main()
   cout << "MatSub    " << matrix_Sub.rows() << " x " << matrix_Sub.cols() << "\tShould be " 
        << matrix_A.rows() << " square" << endl;
   
-  InteriorPointParams<PDIPMSubMatrix> p;
-  PrimalDualInteriorPoint ipm { matrix_Sub, nullptr, ;
-  
+  InteriorPointParams p;
+  PrimalDualInteriorPoint ipm { &matrix_Sub, &rhsB, &costC, p };
+  cout << dualY << endl;
+
+  auto iter = ipm.SolveInPlace(primalV, dualY);
+  cout << "TOTAL ITER " << iter << endl;
 }
