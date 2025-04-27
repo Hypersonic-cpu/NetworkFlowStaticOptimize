@@ -3,19 +3,41 @@
 #include <iostream>
 #include <vector>
 #include <cassert>
+#include <type_traits>
 #include <Eigen/Core>
 #include <Eigen/SparseCore>
 #include <Eigen/IterativeLinearSolvers>
 
-struct PrimalMatrix {
-  using Index = Eigen::Index;
-  const Eigen::SparseMatrix<double>* pmat_M;
-  const Eigen::VectorXd* pvec_C;  // col vec
-  const Eigen::VectorXd* pvec_VQ; // col vec
-  const Index size_Q;
-  const Index size_M;
-  const Index size_N;
+class PDIPMSubMatrix;
+class PrimalMatrix;
 
+namespace Eigen {
+  namespace internal {
+    template<>
+    struct traits<PDIPMSubMatrix> :  public Eigen::internal::traits<Eigen::SparseMatrix<double> >
+    {};
+    template<>
+    struct traits<PrimalMatrix> :  public Eigen::internal::traits<Eigen::SparseMatrix<double> >
+    {};
+  }
+}
+
+
+struct PrimalMatrix : public Eigen::EigenBase<PrimalMatrix> {
+public:
+  using Scalar = double;
+  using RealScalar = double;
+  using StorageIndex = Eigen::Index;
+
+  enum {
+      ColsAtCompileTime = Eigen::Dynamic,
+      MaxColsAtCompileTime = Eigen::Dynamic,
+      IsRowMajor = false
+  };
+
+  using Index = StorageIndex;
+
+  explicit
   PrimalMatrix(Index size_Q, Index size_N, Index size_M, 
                const Eigen::SparseMatrix<double>* mat_M_ptr,
                const Eigen::VectorXd* vec_C_ptr,
@@ -23,11 +45,18 @@ struct PrimalMatrix {
               : size_Q{ size_Q }, size_M{ size_M }, size_N{ size_N },
                 pmat_M{ mat_M_ptr }, 
                 pvec_C{ vec_C_ptr }, 
-                pvec_VQ{ vec_VQ_ptr }
+                pvec_VQ{ vec_VQ_ptr },
+                is_transposed{ false }
   {}
 
   Index rows() const { return (size_N + size_M) * size_Q + size_M; }
   Index cols() const { return (2*size_Q + 1) * size_M + 1; }  
+
+  template<typename Rhs>
+  Eigen::Product<PrimalMatrix, Rhs,Eigen::AliasFreeProduct>
+  operator*(const Eigen::MatrixBase<Rhs>& x) const {
+    return Eigen::Product<PrimalMatrix, Rhs, Eigen::AliasFreeProduct>(*this, x.derived());
+  }
 
   template<typename Rhs, typename Dest>
   void applyThisOnTheLeft(Dest& r, const Rhs& x) const {
@@ -65,53 +94,63 @@ struct PrimalMatrix {
     }
     r.segment(1 + size_O, size_O + size_M) = y.segment(size_Y, size_O + size_M);
   }
+
+  PrimalMatrix transpose() const {
+    auto ret = *this;
+    ret.is_transposed = !this->is_transposed;
+    return ret;
+  }
+
+  bool transposed() const { return this->is_transposed; }
+
+private:
+  const Eigen::SparseMatrix<double>* pmat_M;
+  const Eigen::VectorXd* pvec_C;  // col vec
+  const Eigen::VectorXd* pvec_VQ; // col vec
+  const Index size_Q;
+  const Index size_M;
+  const Index size_N;
+  bool is_transposed;
 };
 
-class PDIPMMatrix;
-
-namespace Eigen {
-  namespace internal {
-    template<>
-    struct traits<PDIPMMatrix> :  public Eigen::internal::traits<Eigen::SparseMatrix<double> >
-    {};
-  }
-}
-
-
-class PDIPMMatrix: public Eigen::EigenBase<PDIPMMatrix> {
+/**
+ * @brief The matrix `AS^{-1}XA^T` for solving delta_y 
+ * in primal-dual IPM.
+ */
+class PDIPMSubMatrix: public Eigen::EigenBase<PDIPMSubMatrix> {
 public:
   using Scalar = double;
   using RealScalar = double;
   using StorageIndex = Eigen::Index;
 
-  // Specify dynamic size (required by Eigen solvers)
   enum {
       ColsAtCompileTime = Eigen::Dynamic,
       MaxColsAtCompileTime = Eigen::Dynamic,
       IsRowMajor = false
   };
 
-  PDIPMMatrix(const PrimalMatrix* pmat_A,
+  PDIPMSubMatrix(const PrimalMatrix* pmat_A,
               Eigen::VectorXd* pvec_V,
               Eigen::VectorXd* pvec_L )
     : pmat_A{ pmat_A }, 
       pvec_V{ pvec_V }, 
       pvec_L{ pvec_L },
       row_A{ pmat_A->rows() },
-      len_V{ pmat_A->cols() }
+      len_V{ pmat_A->cols() },
+      is_transposed{ false }
   { 
     assert(pvec_L->size() == pvec_L->size() && "Vector V/L size inconsist");
     assert(pmat_A->cols() == pvec_L->size() && "Vector/Matrix size inconsist");
   }
 
-  Eigen::Index rows() const { return row_A + 2 * len_V; }
-  Eigen::Index cols() const { return row_A + 2 * len_V; }
+  Eigen::Index rows() const { return row_A; }
+  Eigen::Index cols() const { return row_A; }
 
   // --- Matrix-vector product ---
   template<typename Rhs>
-  Eigen::Product<PDIPMMatrix,Rhs,Eigen::AliasFreeProduct> 
+  Eigen::Product<PDIPMSubMatrix,Rhs,Eigen::AliasFreeProduct> 
   operator*(const Eigen::MatrixBase<Rhs>& x) const {
-    return Eigen::Product<PDIPMMatrix, Rhs, Eigen::AliasFreeProduct>(*this, x.derived());
+    return Eigen::Product<PDIPMSubMatrix, Rhs, Eigen::AliasFreeProduct>(*this, x.derived());
   }
 
   // --- Multiplication Implementation ---
@@ -120,32 +159,26 @@ public:
     assert(x.size() == this->cols() && "Input vector x has incorrect size for perform_op");
     assert(r.size() == this->rows() && "Output vector r has incorrect size for perform_op");
 
-    const auto& dvec_V = x.segment(0, len_V);
-    const auto& dvec_W = x.segment(len_V, row_A);
-    const auto& dvec_L = x.segment(len_V + row_A, len_V);
-
-    pmat_A->applyThisOnTheLeft(y.segment(0, row_A), dvec_V);
-    pmat_A->applyThisOnTheRight(y.segment(row_A, len_V), dvec_W);
-    r.segment(row_A, len_V) += dvec_L;
-
-    r.segment(row_A + len_V, len_V) = 
-      pvec_L->cwiseProduct(dvec_V) + pvec_X->cwiseProduct(dvec_L); 
+    Eigen::VectorXd temp_res(len_V);
+    pmat_A->applyThisOnTheRight(temp_res, x);
+    pmat_A->applyThisOnTheLeft(
+      r, temp_res.cwiseProduct((pvec_V->array() / pvec_L->array()).matrix()));
   }
 
   template<typename Rhs, typename Dest>
   void applyThisOnTheRight(Dest& r, const Rhs& y) const {
-    assert(y.size() == this->rows() && "Input vector y has incorrect size for perform_op");
-    assert(r.size() == this->cols() && "Output vector r has incorrect size for perform_op");
-
-    const auto& dvec_U = y.segment(0, row_A);
-    const auto& dvec_M = y.segment(row_A, len_V);
-    const auto& dvec_D = y.segment(len_V + row_A, len_V);
- 
-    pmat_A->applyThisOnTheRight(r.segment(0, len_V), dvec_U);
-    pmat_A->applyThisOnTheLeft(r.segment(len_V, row_A), dvec_M);
-    r.segment(0, len_V) += pvec_L->cwiseProduct(dvec_D);
-    r.segment(len_V + row_A, len_V) += dvec_M + pvec_V->cwiseProduct(dvec_D);
+    applyThisOnTheLeft(r, y);
   }
+
+  const PrimalMatrix* rawPrimalMatrix() const { return pmat_A; }
+
+  PDIPMSubMatrix transpose() const {
+    assert(false && "Should not be transposed");
+    auto ret = *this;
+    ret.is_transposed = !this->is_transposed;
+    return ret;
+  }
+  bool transposed() const { return this->is_transposed; }
 
 private:
   const PrimalMatrix* pmat_A;
@@ -153,32 +186,41 @@ private:
   Eigen::VectorXd* pvec_L;
   const Index row_A;
   const Index len_V; // Equals to col_A. 
+  bool is_transposed;
 };
 
-// --- Specialization for Eigen's Product mechanism ---
-// This tells Eigen how to evaluate the product PDIPMMatrix * DenseVectorType
 namespace Eigen {
 namespace internal {
+template<typename T>
+struct ipm_matrix_class : std::false_type {};
+template<>
+struct ipm_matrix_class<PDIPMSubMatrix>: std::true_type {};
+template<>
+struct ipm_matrix_class<PrimalMatrix>: std::true_type {};
 
-template<typename Rhs>
-struct generic_product_impl<PDIPMMatrix, Rhs, SparseShape, DenseShape> // MatrixType * DenseVectorType
- : generic_product_impl_base<PDIPMMatrix, Rhs, generic_product_impl<PDIPMMatrix, Rhs> >
+// Matrix * DenseVector
+template<typename Lhs, typename Rhs>
+struct generic_product_impl<Lhs, Rhs, SparseShape, DenseShape> 
+ : generic_product_impl_base<Lhs, Rhs, generic_product_impl<Lhs, Rhs> >
 {
-  using Scalar = typename Product<PDIPMMatrix, Rhs>::Scalar;
+  using Scalar = typename Product<Lhs, Rhs>::Scalar;
 
   template <typename Dest>
-  static void scaleAndAddTo(Dest& dst, const PDIPMMatrix& lhs, const Rhs& rhs, const Scalar& alpha)
+  typename std::enable_if<ipm_matrix_class<Lhs>::value>::type
+  scaleAndAddTo(Dest& dst, const Lhs& lhs, const Rhs& rhs, const Scalar& alpha)
   {
     // This method should implement "dst += alpha * lhs * rhs" inplace,
     // however, for iterative solvers, alpha is always equal to 1, so let's not bother about it.
-    assert(alpha==Scalar(1) && "scaling is not implemented");
-    EIGEN_ONLY_USED_FOR_DEBUG(alpha);
-    
-    Eigen::VectorXd temp_res(lhs.rows());
-    lhs.applyThisOnTheLeft(temp_res, rhs);
-    lhs.applyThisOnTheRight(dst, temp_res);
+    // assert(alpha==Scalar(1) && "scaling is not implemented");
+    // EIGEN_ONLY_USED_FOR_DEBUG(alpha);
+
+    if (lhs.transposed()) {
+      lhs.applyThisOnTheRight(dst, rhs);
+    } else {
+      lhs.applyThisOnTheLeft(dst, rhs);
+    }
+    dst = (alpha * dst).eval();
   }
 };
-
 } // namespace internal
 } // namespace Eigen
