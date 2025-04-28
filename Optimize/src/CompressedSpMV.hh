@@ -144,58 +144,6 @@ private:
 };
 
 /**
- * @brief Represent `A^T A` if `A` is not transposed,
- * or `A A^T` if A.transposed() is true.
- */
-class PrimalMatrixSymmetric : public Eigen::EigenBase<PrimalMatrixSymmetric> {
-public:
-  using Scalar = double;
-  using RealScalar = double;
-  using StorageIndex = Eigen::Index;
-
-  enum {
-    ColsAtCompileTime = Eigen::Dynamic,
-    MaxColsAtCompileTime = Eigen::Dynamic,
-    IsRowMajor = false
-  };
-
-  // Receive r-values since one may call 
-  // PrimalMatrixSymmetric{ matA->transpose() }
-  PrimalMatrixSymmetric(const PrimalMatrix &mat_A)
-      : mat_A{mat_A}, dim{ mat_A.cols()} 
-  {}
-
-  Eigen::Index rows() const { return dim; }
-  Eigen::Index cols() const { return dim; }
-
-  template<typename Rhs>
-  Eigen::Product<PrimalMatrixSymmetric, Rhs,Eigen::AliasFreeProduct>
-  operator*(const Eigen::MatrixBase<Rhs>& x) const {
-    return Eigen::Product<PrimalMatrixSymmetric, Rhs, Eigen::AliasFreeProduct>(*this, x.derived());
-  }
-
-  constexpr bool transposed() const { return false; } 
-
-  template<typename Rhs, typename Dest>
-  void MultiplyVector(Dest& r, const Rhs& v) const {
-    _l_multiply(r, v);
-  }
-  
-protected:
-  template<typename Rhs, typename Dest>
-  void _l_multiply(Dest& r, const Rhs& x) const {
-    assert(x.size() == this->cols() && "Input vector x has incorrect size for perform_op");
-    assert(r.size() == this->rows() && "Output vector r has incorrect size for perform_op");
-
-    r.noalias() = mat_A.transpose() * (mat_A * x);
-  }
-
-private:
-  const PrimalMatrix mat_A;
-  const Index dim;
-};
-
-/**
  * @brief The matrix `AS^{-1}XA^T` for solving delta_dual 
  * in primal-dual IPM.
  */
@@ -252,12 +200,6 @@ protected:
   void _l_multiply(Dest& r, const Rhs& x) const {
     assert(x.size() == this->cols() && "Input vector x has incorrect size for perform_op");
     assert(r.size() == this->rows() && "Output vector r has incorrect size for perform_op");
-
-    // Eigen::VectorXd temp_res(len_V);
-    // pmat_A->applyThisOnTheRight(temp_res, x);
-    // pmat_A->applyThisOnTheLeft(
-    //   r, temp_res.cwiseProduct(pvec_V->cwiseQuotient(*pvec_S))
-    // );
 
     r.noalias() = mat_A * ((mat_A.transpose() * x).cwiseProduct(*pvec_V).cwiseQuotient(*pvec_S));
   }

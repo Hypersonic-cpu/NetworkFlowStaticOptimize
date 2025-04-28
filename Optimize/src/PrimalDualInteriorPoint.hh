@@ -28,7 +28,6 @@ struct InteriorPointParams {
  */
 class PrimalDualInteriorPoint {
   using AMat = PrimalMatrix;
-  using AMatSym = PrimalMatrixSymmetric;
   using EqnMat = PDIPMSubMatrix;
   using Scalar = AMat::Scalar;
   using ColVec = Eigen::VectorXd;
