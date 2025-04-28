@@ -2,6 +2,8 @@
     "files.associations": {
         ".fantomasignore": "ignore",
         "iterativelinearsolvers": "cpp",
-        "iterativesolvers": "cpp"
+        "iterativesolvers": "cpp",
+        "core": "cpp",
+        "sparsecore": "cpp"
     }
 }

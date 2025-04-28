@@ -47,7 +47,7 @@ ReadEdge(std::string fileName, const int EdgeNum, bool is_OD) {
     }
     cnt++;
   }
-  
+  file.close();  
   assert(cnt == EdgeNum);
   return std::make_pair(edges, cap);
 }
@@ -67,6 +67,7 @@ Eigen::VectorXd ReadInit(int Q, int M) {
   for (auto i = 0; i < M; ++i) {
     file3 >> ret(1+2*M*Q + i);
   }
+  file1.close(); file2.close(); file3.close();
   return ret;
 }
 
@@ -74,7 +75,7 @@ int main()
 {
   using Eigen::VectorXd;
   using std::cout, std::endl;
-
+ 
   const int Node = 147;
   const int Edge = 556;
   const int ODmd = 500;
@@ -122,14 +123,15 @@ int main()
   PrimalMatrix matrix_A { ODmd, Node, Edge, &EdgesMat, &EdgesCap, &ODCap };
    
   VectorXd primalV = ReadInit(ODmd, Edge);
-  primalV = primalV * 0.99 + VectorXd::Ones(primalV.size()) * 0.01;  
-  VectorXd dualY = VectorXd::Random(matrix_A.rows()).cwiseAbs() * 0.001 + 0.001 * VectorXd::Ones(matrix_A.rows());
-  VectorXd slackS = primalV.cwiseInverse() * 0.0001;
-  PDIPMSubMatrix matrix_Sub { &matrix_A, &primalV, &slackS };
+  primalV = primalV * 0.999 + VectorXd::Ones(primalV.size()) * 0.0001;  
+  VectorXd dualY = VectorXd::Zero(matrix_A.rows());
+  // VectorXd::Random(matrix_A.rows()).cwiseAbs() * 0.1 + 0.1 * VectorXd::Ones(matrix_A.rows());
+  VectorXd slackS = primalV.cwiseInverse() * 1e-7;
+  PDIPMSubMatrix matrix_Sub { matrix_A, &primalV, &slackS };
   VectorXd costC = VectorXd::Zero(matrix_A.cols());
   { costC(0) = 1; } 
-  VectorXd rhsB  = VectorXd::Zero(matrix_A.rows());
-  {  
+  VectorXd rhsB  = VectorXd::Zero(matrix_A.rows());  
+  {
     for (int k = 0; k < ODMat.outerSize(); ++k) {
       for (Eigen::SparseMatrix<double>::InnerIterator it(ODMat, k); it; ++it) {
           int row = it.row();
@@ -137,11 +139,11 @@ int main()
           double value = it.value();
           int index = col * ODMat.rows() + row;
           rhsB(index) = value;
-          assert(index < Node * ODmd);
-      }
+          assert(index < Node * ODmd); 
+      } 
     }
     rhsB.segment((Node)*ODmd, ODmd * Edge).noalias() = VectorXd::Ones(ODmd * Edge);
-  }
+  } 
 
 
   cout << "Dimension Check: " << endl;
@@ -156,5 +158,5 @@ int main()
   // cout << dualY << endl;   
 
   auto iter = ipm.SolveInPlace(primalV, dualY, slackS);
-  cout << "TOTAL ITER " << iter << endl;
+  cout << "TOTAL ITER " << iter << endl; 
 }

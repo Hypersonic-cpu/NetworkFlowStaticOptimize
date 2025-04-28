@@ -11,6 +11,7 @@
 
 class PDIPMSubMatrix;
 class PrimalMatrix;
+class PrimalMatrixSymmetric;
 
 namespace Eigen {
   namespace internal {
@@ -20,10 +21,16 @@ namespace Eigen {
     template<>
     struct traits<PrimalMatrix> :  public Eigen::internal::traits<Eigen::SparseMatrix<double> >
     {};
+    template<>
+    struct traits<PrimalMatrixSymmetric> :  public Eigen::internal::traits<Eigen::SparseMatrix<double> >
+    {};
   }
 }
 
-
+/**
+ * @attention This class does NOT store values. And DO pass
+ * this type by values but not pointer.
+ */
 class PrimalMatrix : public Eigen::EigenBase<PrimalMatrix> {
 public:
   using Scalar = double;
@@ -38,7 +45,6 @@ public:
 
   using Index = StorageIndex;
 
-  explicit
   PrimalMatrix(Index size_Q, Index size_N, Index size_M, 
                const Eigen::SparseMatrix<double>* mat_M_ptr,
                const Eigen::VectorXd* vec_C_ptr,
@@ -52,6 +58,8 @@ public:
                 is_transposed{ false }
   {}
 
+  PrimalMatrix(const PrimalMatrix& other) = default;
+
   Index rows() const { return !is_transposed ? tot_rows : tot_cols; }
   Index cols() const { return !is_transposed ? tot_cols : tot_rows; }  
 
@@ -61,8 +69,29 @@ public:
     return Eigen::Product<PrimalMatrix, Rhs, Eigen::AliasFreeProduct>(*this, x.derived());
   }
 
+  PrimalMatrix transpose() const {
+    auto ret = *this;
+    ret.is_transposed = !this->is_transposed;
+    return ret;
+  }
+
+  bool transposed() const { return this->is_transposed; }
+
+  /**
+   * @brief Apply this matrix on the left of the vector.
+   */
   template<typename Rhs, typename Dest>
-  void applyThisOnTheLeft(Dest& r, const Rhs& x) const {
+  void MultiplyVector(Dest& r, const Rhs& v) const { 
+    if (transposed()) {
+      _r_multiply(r, v);
+    } else {
+      _l_multiply(r, v);
+    }
+  }
+
+protected:
+  template<typename Rhs, typename Dest>
+  void _l_multiply(Dest& r, const Rhs& x) const {
     assert(x.size() == tot_cols && "Incorrect size of input vec");
     assert(r.size() == tot_rows && "Incorrect size of output vec");
    
@@ -74,14 +103,14 @@ public:
     // auto mat_VQ = pvec_VQ->asDiagonal();
 
     auto size_O = size_N * size_Q;
-    r.segment(0, size_O) = ((*pmat_M) * mat_X).template reshaped<Eigen::ColMajor>(size_N * size_Q, 1);
+    r.segment(0, size_O).noalias() = ((*pmat_M) * mat_X).template reshaped<Eigen::ColMajor>(size_N * size_Q, 1);
     r.segment(size_O, size_X) = vec_X + vec_R;
     r.segment(size_O + size_X, size_M) = 
       x(0) * (*pvec_C) + mat_X * (*pvec_VQ) + vec_S;
   }
 
   template<typename Rhs, typename Dest>
-  void applyThisOnTheRight(Dest& r, const Rhs& y) const { 
+  void _r_multiply(Dest& r, const Rhs& y) const { 
     assert(r.size() == tot_cols && "Incorrect size of output vec");
     assert(y.size() == tot_rows && "Incorrect size of input vec");
 
@@ -97,18 +126,10 @@ public:
       (pmat_M->transpose() * mat_Y).template reshaped<Eigen::ColMajor>(size_O, 1) 
       + y.segment(size_Y, size_O);
     for (Index i = 0; i < size_Q; ++i) {
-      r.segment(1 + i * size_M, size_M) += (*pvec_VQ)(i) * vec_L;
+      r.segment(1 + i * size_M, size_M).noalias() += (*pvec_VQ)(i) * vec_L;
     }
-    r.segment(1 + size_O, size_O + size_M) = y.segment(size_Y, size_O + size_M);
+    r.segment(1 + size_O, size_O + size_M).noalias() = y.segment(size_Y, size_O + size_M);
   }
-
-  PrimalMatrix transpose() const {
-    auto ret = *this;
-    ret.is_transposed = !this->is_transposed;
-    return ret;
-  }
-
-  bool transposed() const { return this->is_transposed; }
 
 private:
   const Eigen::SparseMatrix<double>* pmat_M;
@@ -120,6 +141,58 @@ private:
   const Index tot_rows;
   const Index tot_cols;
   bool is_transposed;
+};
+
+/**
+ * @brief Represent `A^T A` if `A` is not transposed,
+ * or `A A^T` if A.transposed() is true.
+ */
+class PrimalMatrixSymmetric : public Eigen::EigenBase<PrimalMatrixSymmetric> {
+public:
+  using Scalar = double;
+  using RealScalar = double;
+  using StorageIndex = Eigen::Index;
+
+  enum {
+    ColsAtCompileTime = Eigen::Dynamic,
+    MaxColsAtCompileTime = Eigen::Dynamic,
+    IsRowMajor = false
+  };
+
+  // Receive r-values since one may call 
+  // PrimalMatrixSymmetric{ matA->transpose() }
+  PrimalMatrixSymmetric(const PrimalMatrix &mat_A)
+      : mat_A{mat_A}, dim{ mat_A.cols()} 
+  {}
+
+  Eigen::Index rows() const { return dim; }
+  Eigen::Index cols() const { return dim; }
+
+  template<typename Rhs>
+  Eigen::Product<PrimalMatrixSymmetric, Rhs,Eigen::AliasFreeProduct>
+  operator*(const Eigen::MatrixBase<Rhs>& x) const {
+    return Eigen::Product<PrimalMatrixSymmetric, Rhs, Eigen::AliasFreeProduct>(*this, x.derived());
+  }
+
+  constexpr bool transposed() const { return false; } 
+
+  template<typename Rhs, typename Dest>
+  void MultiplyVector(Dest& r, const Rhs& v) const {
+    _l_multiply(r, v);
+  }
+  
+protected:
+  template<typename Rhs, typename Dest>
+  void _l_multiply(Dest& r, const Rhs& x) const {
+    assert(x.size() == this->cols() && "Input vector x has incorrect size for perform_op");
+    assert(r.size() == this->rows() && "Output vector r has incorrect size for perform_op");
+
+    r.noalias() = mat_A.transpose() * (mat_A * x);
+  }
+
+private:
+  const PrimalMatrix mat_A;
+  const Index dim;
 };
 
 /**
@@ -138,18 +211,18 @@ public:
       IsRowMajor = false
   };
 
-  PDIPMSubMatrix(const PrimalMatrix* pmat_A,
+  PDIPMSubMatrix(const PrimalMatrix& mat_A,
               Eigen::VectorXd* pvec_V,
               Eigen::VectorXd* pvec_S )
-    : pmat_A{ pmat_A }, 
+    : mat_A{ mat_A }, 
       pvec_V{ pvec_V }, 
       pvec_S{ pvec_S },
-      row_A{ pmat_A->rows() },
-      len_V{ pmat_A->cols() },
-      is_transposed{ false }
+      row_A{ mat_A.rows() },
+      len_V{ mat_A.cols() } 
   { 
     assert(pvec_S->size() == pvec_V->size() && "Vector V/S size inconsist");
-    assert(pmat_A->cols() == pvec_S->size() && "Vector/Matrix size inconsist");
+    assert(mat_A.cols() == pvec_S->size() && "Vector/Matrix size inconsist");
+    assert(!mat_A.transposed());
   }
 
   Eigen::Index rows() const { return row_A; }
@@ -162,41 +235,39 @@ public:
     return Eigen::Product<PDIPMSubMatrix, Rhs, Eigen::AliasFreeProduct>(*this, x.derived());
   }
 
-  // --- Multiplication Implementation ---
+  const PrimalMatrix& rawPrimalMatrix() const { return mat_A; }
+
+  constexpr bool transposed() const { return false; }
+
+  /**
+   * @brief Apply this matrix on the left of the vector.
+   */
   template<typename Rhs, typename Dest>
-  void applyThisOnTheLeft(Dest& r, const Rhs& x) const {
+  void MultiplyVector(Dest& r, const Rhs& v) const { 
+    _l_multiply(r, v);
+  }
+
+protected:
+  template<typename Rhs, typename Dest>
+  void _l_multiply(Dest& r, const Rhs& x) const {
     assert(x.size() == this->cols() && "Input vector x has incorrect size for perform_op");
     assert(r.size() == this->rows() && "Output vector r has incorrect size for perform_op");
 
-    Eigen::VectorXd temp_res(len_V);
-    pmat_A->applyThisOnTheRight(temp_res, x);
-    pmat_A->applyThisOnTheLeft(
-      r, temp_res.cwiseProduct(pvec_V->cwiseQuotient(*pvec_S))
-    );
-  }
+    // Eigen::VectorXd temp_res(len_V);
+    // pmat_A->applyThisOnTheRight(temp_res, x);
+    // pmat_A->applyThisOnTheLeft(
+    //   r, temp_res.cwiseProduct(pvec_V->cwiseQuotient(*pvec_S))
+    // );
 
-  template<typename Rhs, typename Dest>
-  void applyThisOnTheRight(Dest& r, const Rhs& y) const {
-    applyThisOnTheLeft(r, y);
+    r.noalias() = mat_A * ((mat_A.transpose() * x).cwiseProduct(*pvec_V).cwiseQuotient(*pvec_S));
   }
-
-  const PrimalMatrix* rawPrimalMatrix() const { return pmat_A; }
-
-  PDIPMSubMatrix transpose() const {
-    assert(false && "Should not be transposed");
-    auto ret = *this;
-    ret.is_transposed = !this->is_transposed;
-    return ret;
-  }
-  bool transposed() const { return this->is_transposed; }
 
 private:
-  const PrimalMatrix* pmat_A;
+  const PrimalMatrix mat_A;
   Eigen::VectorXd* pvec_V;
   Eigen::VectorXd* pvec_S;
   const Index row_A;
   const Index len_V; // Equals to col_A. 
-  bool is_transposed;
 };
 
 namespace Eigen {
@@ -207,7 +278,7 @@ template<typename T, typename... U>
 concept IsAnyOf = (std::same_as<T, U> || ...);
 
 template<typename Lhs, typename Rhs>
-requires IsAnyOf<Lhs, PrimalMatrix, PDIPMSubMatrix>
+requires IsAnyOf<Lhs, PrimalMatrix, PrimalMatrixSymmetric, PDIPMSubMatrix>
 struct generic_product_impl<Lhs, Rhs, SparseShape, DenseShape> 
  : generic_product_impl_base<Lhs, Rhs, generic_product_impl<Lhs, Rhs> >
 {
@@ -218,15 +289,11 @@ struct generic_product_impl<Lhs, Rhs, SparseShape, DenseShape>
   {
     // This method should implement "dst += alpha * lhs * rhs" inplace,
     // however, for iterative solvers, alpha is always equal to 1, so let's not bother about it.
-    // assert(alpha==Scalar(1) && "scaling is not implemented");
-    // EIGEN_ONLY_USED_FOR_DEBUG(alpha);
+    assert(alpha==Scalar(1) && "scaling is not implemented");
+    EIGEN_ONLY_USED_FOR_DEBUG(alpha);
 
-    if (lhs.transposed()) {
-      lhs.applyThisOnTheRight(dst, rhs);
-    } else {
-      lhs.applyThisOnTheLeft(dst, rhs);
-    }
-    dst = (alpha * dst).eval();
+    lhs.MultiplyVector(dst, rhs);
+    // dst = (alpha * dst).eval();
   }
 };
 } // namespace internal
