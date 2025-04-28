@@ -11,11 +11,11 @@
 #include "CompressedSpMV.hh"
 
 struct InteriorPointParams {
-  int MaxIteration = 1000;
+  int MaxIteration = 10000;
   double GradTolerance = 1e-5;
   double EqnTolerance = 1e-6;
   double KKTCondSigma = 0.95;
-  double CentralPathTau = 0.01;
+  double CentralPathTau = 2e-4;
   double CentralPathRho = 0.3;
 };
 
@@ -50,7 +50,7 @@ public:
            && "RHS/Matrix have inconsist sizes"); 
   }
 
-  int SolveInPlace(ColVec& var, ColVec& dual, 
+  int SolveInPlace(ColVec& var, ColVec& dual, ColVec& slack, 
                     Scalar overall_tol=1e-5) {
     using std::cout, std::endl;
     assert(var.size() == prob_dim && "Var/Matrix have inconsist sizes");
@@ -58,47 +58,57 @@ public:
 
     cout << "Invoking SolveInPlace" << endl;
     cout << pvec_C->size() << " " << pmat_A->transpose().cols() << " " << dual.size() << endl;
-    ColVec slack = *pvec_C - pmat_A->transpose().operator*(dual);
 
     ColVec d_primal(prob_dim);
     ColVec d_dual(rhs_dim);
     ColVec d_slack(prob_dim);
     ColVec rhs_dual(rhs_dim);
+    ColVec r_primal(prob_dim);
+    ColVec r_dual(rhs_dim);
+    ColVec r_comp(prob_dim);
+
     int iteration = 0;
     cout << "Invoking SolveInPlace" << endl;
     Scalar curr_mu = var.dot(slack) / prob_dim;
+    Scalar alpha = params.CentralPathRho;
 
     do {
       cout << "Iter #" << iteration << "\t" << endl;
-      ColVec r_primal = (*pvec_B) - (*pmat_A) * var;
-      ColVec r_dual = (*pvec_C) - slack - pmat_A->transpose().operator*(dual);
-      ColVec r_comp = 
+      r_primal.noalias() = (*pvec_B) - (*pmat_A) * var;
+      r_dual.noalias()   = (*pvec_C) - slack - pmat_A->transpose().operator*(dual);
+      r_comp.noalias()   = 
         params.KKTCondSigma * curr_mu * ColVec::Ones(prob_dim) - var.cwiseProduct(slack);
 
       rhs_dual = r_primal + pmat_A->operator*(
         (var.cwiseProduct(r_dual) - r_comp).cwiseQuotient(slack)
       );
 
+      // cout << "primal " << var.transpose() << endl;
+      // cout << "dual   " << dual.transpose() << endl;
+      // cout << "slack " << slack.transpose() << endl;
+      // cout << endl;
+      // cout << "primal " << r_primal.transpose() << endl;
+      // cout << "dual   " << pvec_C->transpose() - slack.transpose()-pmat_A->transpose().operator*(dual).transpose() << endl;
+      // cout << "slack " << r_comp.transpose() << endl;
+
       Eigen::ConjugateGradient<EqnMat, Eigen::Lower|Eigen::Upper, Eigen::IdentityPreconditioner> cg;
-      cg.compute(*pmat_Eqn);
+      cg.setMaxIterations(2).compute(*pmat_Eqn);
       d_dual = cg.solve(rhs_dual);
 
       d_slack = r_dual - pmat_A->transpose().operator*(d_dual);
       d_primal = (r_comp - var.cwiseProduct(d_slack)).cwiseQuotient(slack);
 
-      cout << d_dual.transpose() << endl;
-      
-      Scalar alpha = params.CentralPathRho;
+      alpha = params.CentralPathRho;
       while (true) {
-        int a;
-        std::cin >> a;
         ColVec nxt_primal = var + d_primal * alpha;
         ColVec nxt_slack = slack + d_slack * alpha;
-        cout << alpha << " | " << nxt_primal.transpose() << endl;
-        cout << (nxt_primal.cwiseProduct(nxt_slack)).transpose() << endl;
+        cout << curr_mu << " " << params.CentralPathTau * curr_mu << " " <<  alpha << " " <<(nxt_primal.cwiseProduct(nxt_slack)).minCoeff() << endl;
+        int aaa;
+        std::cin >> aaa;
         if (
-          ((nxt_primal.cwiseProduct(nxt_slack)).array() 
-            >= params.CentralPathTau * curr_mu).all()
+          // ((nxt_primal.cwiseProduct(nxt_slack)).array() 
+            // >= params.CentralPathTau * curr_mu).all()
+            true
           && (nxt_primal.array() >= 0).all()
           && (nxt_slack.array() >= 0).all()
         ) { break; }
@@ -109,9 +119,10 @@ public:
       var += alpha * d_primal;
       dual += alpha * d_dual;
       slack += alpha * d_slack;
-
+      curr_mu = var.dot(slack) / prob_dim;
+      cout << "Val " << var(0) << endl;
     } while (++iteration <= params.MaxIteration
-             && d_primal.squaredNorm() > params.GradTolerance );
+             && curr_mu > params.GradTolerance );
     return iteration;
   }
   
