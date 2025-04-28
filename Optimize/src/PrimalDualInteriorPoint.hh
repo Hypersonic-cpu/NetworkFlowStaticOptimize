@@ -2,6 +2,7 @@
 #include <iostream>
 #include <vector>
 #include <cassert>
+#include <iomanip>
 #include <Eigen/Core>
 #include <Eigen/SparseCore>
 #include <Eigen/Dense>
@@ -15,7 +16,7 @@ struct InteriorPointParams {
   double GradTolerance = 1e-5;
   double EqnTolerance = 1e-6;
   double KKTCondSigma = 0.95;
-  double CentralPathTau = 2e-4;
+  double CentralPathTau = 2e-5;
   double CentralPathRho = 0.3;
 };
 
@@ -92,17 +93,17 @@ public:
       // cout << "slack " << r_comp.transpose() << endl;
 
       Eigen::ConjugateGradient<EqnMat, Eigen::Lower|Eigen::Upper, Eigen::IdentityPreconditioner> cg;
-      cg.setMaxIterations(2).compute(*pmat_Eqn);
+      cg.setMaxIterations(5).compute(*pmat_Eqn);
       d_dual = cg.solve(rhs_dual);
 
       d_slack = r_dual - pmat_A->transpose().operator*(d_dual);
       d_primal = (r_comp - var.cwiseProduct(d_slack)).cwiseQuotient(slack);
 
-      alpha = params.CentralPathRho;
+      alpha /= params.CentralPathRho * params.CentralPathRho;
       while (true) {
         ColVec nxt_primal = var + d_primal * alpha;
         ColVec nxt_slack = slack + d_slack * alpha;
-        cout << curr_mu << " " << params.CentralPathTau * curr_mu << " " <<  alpha << " " <<(nxt_primal.cwiseProduct(nxt_slack)).minCoeff() << endl;
+        cout << std::setprecision(12) << curr_mu << " " << params.CentralPathTau * curr_mu << " " <<  alpha << " " <<(nxt_primal.cwiseProduct(nxt_slack)).minCoeff() << endl;
         int aaa;
         std::cin >> aaa;
         if (
@@ -120,6 +121,7 @@ public:
       dual += alpha * d_dual;
       slack += alpha * d_slack;
       curr_mu = var.dot(slack) / prob_dim;
+      cout << var.minCoeff() << " " << var.maxCoeff() << " " << slack.minCoeff() << " " << slack.maxCoeff() << endl;
       cout << "Val " << var(0) << endl;
     } while (++iteration <= params.MaxIteration
              && curr_mu > params.GradTolerance );

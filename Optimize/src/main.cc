@@ -120,16 +120,16 @@ int main()
   // cout << endl;
 
   PrimalMatrix matrix_A { ODmd, Node, Edge, &EdgesMat, &EdgesCap, &ODCap };
-  
+   
   VectorXd primalV = ReadInit(ODmd, Edge);
-  primalV = primalV * 0.90 + VectorXd::Ones(primalV.size()) * 0.1;  
-  VectorXd dualY = VectorXd::Random(matrix_A.rows()).cwiseAbs() * 0.1 + 0.1 * VectorXd::Ones(matrix_A.rows());
-  VectorXd slackS = VectorXd::Random(matrix_A.cols()).cwiseAbs() * 0.1;
+  primalV = primalV * 0.99 + VectorXd::Ones(primalV.size()) * 0.01;  
+  VectorXd dualY = VectorXd::Random(matrix_A.rows()).cwiseAbs() * 0.001 + 0.001 * VectorXd::Ones(matrix_A.rows());
+  VectorXd slackS = primalV.cwiseInverse() * 0.0001;
   PDIPMSubMatrix matrix_Sub { &matrix_A, &primalV, &slackS };
   VectorXd costC = VectorXd::Zero(matrix_A.cols());
   { costC(0) = 1; } 
   VectorXd rhsB  = VectorXd::Zero(matrix_A.rows());
-  { 
+  {  
     for (int k = 0; k < ODMat.outerSize(); ++k) {
       for (Eigen::SparseMatrix<double>::InnerIterator it(ODMat, k); it; ++it) {
           int row = it.row();
