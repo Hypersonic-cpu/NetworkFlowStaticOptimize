@@ -127,7 +127,7 @@ int main()
   VectorXd dualY = VectorXd::Zero(matrix_A.rows());
   // VectorXd::Random(matrix_A.rows()).cwiseAbs() * 0.1 + 0.1 * VectorXd::Ones(matrix_A.rows());
   VectorXd slackS = primalV.cwiseInverse() * 1e-7;
-  PDIPMSubMatrix matrix_Sub { matrix_A, &primalV, &slackS };
+  PDIPMSubMatrix<PrimalMatrix> matrix_Sub { &matrix_A, &primalV, &slackS };
   VectorXd costC = VectorXd::Zero(matrix_A.cols());
   { costC(0) = 1; } 
   VectorXd rhsB  = VectorXd::Zero(matrix_A.rows());  
@@ -149,12 +149,12 @@ int main()
   cout << "Dimension Check: " << endl;
   cout << "Q " << ODmd << "\tM " << Edge << "\tN " << Node << endl;
   cout << "MatA Size " << matrix_A.rows() << " x " << matrix_A.cols() << "\tShould be " 
-       << (Edge + Node) * ODmd + Edge << " x " << 1 + (2 * ODmd + 1) * Edge << endl;
+                << (Edge + Node) * ODmd + Edge << " x " << 1 + (2 * ODmd + 1) * Edge << endl;
   cout << "MatSub    " << matrix_Sub.rows() << " x " << matrix_Sub.cols() << "\tShould be " 
        << matrix_A.rows() << " square" << endl; 
  
   InteriorPointParams p;
-  PrimalDualInteriorPoint ipm { &matrix_Sub, &rhsB, &costC, p };
+  PrimalDualInteriorPoint<PrimalMatrix> ipm { &matrix_Sub, &rhsB, &costC, p };
   // cout << dualY << endl;   
 
   auto iter = ipm.SolveInPlace(primalV, dualY, slackS);

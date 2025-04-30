@@ -9,20 +9,17 @@
 #include <Eigen/SparseCore>
 #include <Eigen/IterativeLinearSolvers>
 
+template<typename T>
 class PDIPMSubMatrix;
 class PrimalMatrix;
-class PrimalMatrixSymmetric;
 
 namespace Eigen {
   namespace internal {
-    template<>
-    struct traits<PDIPMSubMatrix> :  public Eigen::internal::traits<Eigen::SparseMatrix<double> >
+    template<typename T>
+    struct traits<PDIPMSubMatrix<T>> :  public Eigen::internal::traits<Eigen::SparseMatrix<double> >
     {};
     template<>
     struct traits<PrimalMatrix> :  public Eigen::internal::traits<Eigen::SparseMatrix<double> >
-    {};
-    template<>
-    struct traits<PrimalMatrixSymmetric> :  public Eigen::internal::traits<Eigen::SparseMatrix<double> >
     {};
   }
 }
@@ -147,7 +144,8 @@ private:
  * @brief The matrix `AS^{-1}XA^T` for solving delta_dual 
  * in primal-dual IPM.
  */
-class PDIPMSubMatrix: public Eigen::EigenBase<PDIPMSubMatrix> {
+template<typename TMat>
+class PDIPMSubMatrix: public Eigen::EigenBase<PDIPMSubMatrix<TMat> > {
 public:
   using Scalar = double;
   using RealScalar = double;
@@ -159,18 +157,20 @@ public:
       IsRowMajor = false
   };
 
-  PDIPMSubMatrix(const PrimalMatrix& mat_A,
+  using Index =StorageIndex;
+
+  PDIPMSubMatrix(const TMat* mat_A_ptr,
               Eigen::VectorXd* pvec_V,
               Eigen::VectorXd* pvec_S )
-    : mat_A{ mat_A }, 
+    : pmat_A{ mat_A_ptr }, 
       pvec_V{ pvec_V }, 
       pvec_S{ pvec_S },
-      row_A{ mat_A.rows() },
-      len_V{ mat_A.cols() } 
+      row_A{ pmat_A->rows() },
+      len_V{ pmat_A->cols() } 
   { 
     assert(pvec_S->size() == pvec_V->size() && "Vector V/S size inconsist");
-    assert(mat_A.cols() == pvec_S->size() && "Vector/Matrix size inconsist");
-    assert(!mat_A.transposed());
+    assert(pmat_A->cols() == pvec_S->size() && "Vector/Matrix size inconsist");
+    assert(!pmat_A->transposed());
   }
 
   Eigen::Index rows() const { return row_A; }
@@ -178,12 +178,12 @@ public:
 
   // --- Matrix-vector product ---
   template<typename Rhs>
-  Eigen::Product<PDIPMSubMatrix,Rhs,Eigen::AliasFreeProduct> 
+  Eigen::Product<PDIPMSubMatrix<TMat>,Rhs,Eigen::AliasFreeProduct> 
   operator*(const Eigen::MatrixBase<Rhs>& x) const {
-    return Eigen::Product<PDIPMSubMatrix, Rhs, Eigen::AliasFreeProduct>(*this, x.derived());
+    return Eigen::Product<PDIPMSubMatrix<TMat>, Rhs, Eigen::AliasFreeProduct>(*this, x.derived());
   }
 
-  const PrimalMatrix& rawPrimalMatrix() const { return mat_A; }
+  const TMat* rawPrimalMatrix() const { return pmat_A; }
 
   constexpr bool transposed() const { return false; }
 
@@ -201,11 +201,11 @@ protected:
     assert(x.size() == this->cols() && "Input vector x has incorrect size for perform_op");
     assert(r.size() == this->rows() && "Output vector r has incorrect size for perform_op");
 
-    r.noalias() = mat_A * ((mat_A.transpose() * x).cwiseProduct(*pvec_V).cwiseQuotient(*pvec_S));
+    r.noalias() = *pmat_A * ((pmat_A->transpose() * x).cwiseProduct(*pvec_V).cwiseQuotient(*pvec_S));
   }
 
 private:
-  const PrimalMatrix mat_A;
+  const TMat* pmat_A;
   Eigen::VectorXd* pvec_V;
   Eigen::VectorXd* pvec_S;
   const Index row_A;
@@ -220,7 +220,7 @@ template<typename T, typename... U>
 concept IsAnyOf = (std::same_as<T, U> || ...);
 
 template<typename Lhs, typename Rhs>
-requires IsAnyOf<Lhs, PrimalMatrix, PrimalMatrixSymmetric, PDIPMSubMatrix>
+requires IsAnyOf<Lhs, PrimalMatrix, PDIPMSubMatrix<PrimalMatrix>>
 struct generic_product_impl<Lhs, Rhs, SparseShape, DenseShape> 
  : generic_product_impl_base<Lhs, Rhs, generic_product_impl<Lhs, Rhs> >
 {

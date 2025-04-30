@@ -26,9 +26,9 @@ struct InteriorPointParams {
  * @attention This class does NOT store any matrices. 
  * Matrices are passed by pointer-to-ColVec or Matrix.
  */
+template<typename AMat>
 class PrimalDualInteriorPoint {
-  using AMat = PrimalMatrix;
-  using EqnMat = PDIPMSubMatrix;
+  using EqnMat = PDIPMSubMatrix<AMat>;
   using Scalar = AMat::Scalar;
   using ColVec = Eigen::VectorXd;
   using RowVec = Eigen::RowVectorXd;
@@ -39,12 +39,12 @@ public:
                           const ColVec* vec_B_ptr, 
                           const ColVec* vec_C_ptr, 
                           InteriorPointParams params)
-  : mat_A{ mat_Eqn_ptr->rawPrimalMatrix() },
+  : pmat_A{ mat_Eqn_ptr->rawPrimalMatrix() },
     pmat_Eqn{ mat_Eqn_ptr },
     pvec_B{ vec_B_ptr },
     pvec_C{ vec_C_ptr },
-    rhs_dim{ mat_Eqn_ptr->rawPrimalMatrix().rows() },
-    prob_dim{ mat_Eqn_ptr->rawPrimalMatrix().cols() },
+    rhs_dim{ mat_Eqn_ptr->rawPrimalMatrix()->rows() },
+    prob_dim{ mat_Eqn_ptr->rawPrimalMatrix()->cols() },
     params{ params }
   {
     assert(vec_B_ptr->size() == rhs_dim
@@ -83,15 +83,15 @@ public:
 
     do {
       cout << "Iter #" << iteration << "\t" << endl;
-      slack = *pvec_C - mat_A.transpose().operator*(dual);
+      slack = *pvec_C - pmat_A->transpose().operator*(dual);
       cout << var.minCoeff() << " " << slack.minCoeff() << " " << dual.minCoeff() << endl;
 
-      r_primal.noalias() = (*pvec_B) - mat_A.operator*(var);
-      r_dual.noalias()   = (*pvec_C) - slack - mat_A.transpose().operator*(dual);
+      r_primal.noalias() = (*pvec_B) - pmat_A->operator*(var);
+      r_dual.noalias()   = (*pvec_C) - slack - pmat_A->transpose().operator*(dual);
       r_comp.noalias()   = 
         params.KKTCondSigma * curr_mu * ColVec::Ones(prob_dim) - var.cwiseProduct(slack);
 
-      rhs_dual = r_primal + mat_A.operator*(
+      rhs_dual = r_primal + pmat_A->operator*(
         (var.cwiseProduct(r_dual) - r_comp).cwiseQuotient(slack)
       );
 
@@ -103,13 +103,13 @@ public:
       // cout << "dual   " << pvec_C->transpose() - slack.transpose()-pmat_A->transpose().operator*(dual).transpose() << endl;
       // cout << "slack " << r_comp.transpose() << endl;
 
-      Eigen::BiCGSTAB<PDIPMSubMatrix, Eigen::IdentityPreconditioner > cg;
+      Eigen::BiCGSTAB<PDIPMSubMatrix<AMat>, Eigen::IdentityPreconditioner > cg;
       // Eigen::ConjugateGradient<PDIPMSubMatrix, Eigen::Upper|Eigen::Lower, Eigen::IdentityPreconditioner > cg;
       cg.setMaxIterations(200).compute(*pmat_Eqn);
       d_dual = cg.solve(rhs_dual);
       cout << cg.iterations() << " iter, error = " << cg.error() << endl;
 
-      d_slack = r_dual - mat_A.transpose().operator*(d_dual);
+      d_slack = r_dual - pmat_A->transpose().operator*(d_dual);
       d_primal = (r_comp - var.cwiseProduct(d_slack)).cwiseQuotient(slack);
 
       alpha /= params.CentralPathRho * params.CentralPathRho;
@@ -158,7 +158,7 @@ private:
   InteriorPointParams params;
   const Index prob_dim;
   const Index rhs_dim;
-  const AMat  mat_A;
+  const AMat* pmat_A;
   const ColVec* pvec_B;
   const ColVec* pvec_C;
   EqnMat* pmat_Eqn; 
