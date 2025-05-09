@@ -12,6 +12,7 @@
 template<typename T>
 class PDIPMSubMatrix;
 class PrimalMatrix;
+class AuxMatrix;
 
 namespace Eigen {
   namespace internal {
@@ -21,12 +22,15 @@ namespace Eigen {
     template<>
     struct traits<PrimalMatrix> :  public Eigen::internal::traits<Eigen::SparseMatrix<double> >
     {};
+
+    template<>
+    struct traits<AuxMatrix> :  public Eigen::internal::traits<Eigen::SparseMatrix<double> >
+    {};
   }
 }
 
 /**
- * @attention This class does NOT store values. And DO pass
- * this type by values but not pointer.
+ * @attention This class does NOT store values. 
  */
 class PrimalMatrix : public Eigen::EigenBase<PrimalMatrix> {
 public:
@@ -45,20 +49,25 @@ public:
   PrimalMatrix(Index size_Q, Index size_N, Index size_M, 
                const Eigen::SparseMatrix<double>* mat_M_ptr,
                const Eigen::VectorXd* vec_C_ptr,
-               const Eigen::VectorXd* vec_VQ_ptr)
+               const Eigen::VectorXd* vec_VQ_ptr,
+               const bool is_transposed=false,
+               const bool extend_symmetric=false)
               : size_Q{ size_Q }, size_M{ size_M }, size_N{ size_N },
                 tot_rows{ (size_N + size_M) * size_Q + size_M },
-                tot_cols{ (2*size_Q + 1) * size_M + 1 },
+                tot_cols{ ((2*size_Q + 1) * size_M + 1) },
                 pmat_M{ mat_M_ptr }, 
                 pvec_C{ vec_C_ptr }, 
                 pvec_VQ{ vec_VQ_ptr },
-                is_transposed{ false }
-  {}
+                is_transposed{ is_transposed },
+                extend_symmetric{ extend_symmetric } /** @attention extend A to A * AT */
+  {
+    assert(!is_transposed || !extend_symmetric );
+  }
 
-  PrimalMatrix(const PrimalMatrix& other) = default;
+  // PrimalMatrix(const PrimalMatrix& other) = default;
 
   Index rows() const { return !is_transposed ? tot_rows : tot_cols; }
-  Index cols() const { return !is_transposed ? tot_cols : tot_rows; }  
+  Index cols() const { return (extend_symmetric xor !is_transposed) ? tot_cols : tot_rows; }  
 
   template<typename Rhs>
   Eigen::Product<PrimalMatrix, Rhs,Eigen::AliasFreeProduct>
@@ -67,19 +76,25 @@ public:
   }
 
   PrimalMatrix transpose() const {
-    auto ret = *this;
-    ret.is_transposed = !this->is_transposed;
+    PrimalMatrix ret{ size_Q, size_N, size_M, pmat_M, pvec_C, pvec_VQ, !is_transposed, extend_symmetric };
+    return ret;
+  }
+  PrimalMatrix extend_to_symmetric() const {
+    PrimalMatrix ret{ size_Q, size_N, size_M, pmat_M, pvec_C, pvec_VQ, is_transposed, !extend_symmetric };
     return ret;
   }
 
   bool transposed() const { return this->is_transposed; }
+  bool symmetric() const { return this->extend_symmetric; }
 
-  /**
-   * @brief Apply this matrix on the left of the vector.
-   */
   template<typename Rhs, typename Dest>
   void MultiplyVector(Dest& r, const Rhs& v) const { 
-    if (transposed()) {
+    if (symmetric()) {
+      Eigen::VectorXd temp (tot_cols);
+      _r_multiply(temp, v);
+      _l_multiply(r, temp);
+    }
+    else if (transposed()) {
       _r_multiply(r, v);
     } else {
       _l_multiply(r, v);
@@ -87,6 +102,7 @@ public:
   }
 
 protected:
+  /** @brief Apply this on the left */
   template<typename Rhs, typename Dest>
   void _l_multiply(Dest& r, const Rhs& x) const {
     assert(x.size() == tot_cols && "Incorrect size of input vec");
@@ -106,6 +122,7 @@ protected:
       x(0) * (*pvec_C) + mat_X * (*pvec_VQ) + vec_S;
   }
 
+  /** @brief Apply this on the right */
   template<typename Rhs, typename Dest>
   void _r_multiply(Dest& r, const Rhs& y) const { 
     assert(r.size() == tot_cols && "Incorrect size of output vec");
@@ -137,7 +154,115 @@ private:
   const Index size_N;
   const Index tot_rows;
   const Index tot_cols;
-  bool is_transposed;
+  const bool is_transposed;
+  const bool extend_symmetric;
+};
+
+class AuxMatrix: public Eigen::EigenBase<AuxMatrix> {
+public:
+  using Scalar = double;
+  using RealScalar = double;
+  using StorageIndex = Eigen::Index;
+
+  enum {
+      ColsAtCompileTime = Eigen::Dynamic,
+      MaxColsAtCompileTime = Eigen::Dynamic,
+      IsRowMajor = false
+  };
+
+  using Index = StorageIndex;
+
+  // This matrix * [r_0; x; s] is equiv to  Ax + s +r_0 z. 
+  AuxMatrix(const PrimalMatrix* mat_A_ptr,
+            const Eigen::VectorXd* vec_R0_ptr,
+            const bool is_transposed=false,
+            const bool extend_symmetric=false )
+          : pmat_A{ mat_A_ptr }, pvec_R0{ vec_R0_ptr },
+            matA_rows{ mat_A_ptr->rows() },
+            matA_cols{ mat_A_ptr->cols() },
+            rows_{ mat_A_ptr->rows() }, 
+            cols_{ mat_A_ptr->cols() + 1 },
+            is_transposed{ is_transposed },
+            extend_symmetric{ extend_symmetric }
+          {
+            assert(!mat_A_ptr->transposed());
+            assert(!is_transposed);
+          };
+  
+
+  AuxMatrix(const AuxMatrix& other) = default;
+
+  Index rows() const { return !is_transposed ? rows_ : cols_; }
+  Index cols() const { return (extend_symmetric xor !is_transposed) ? cols_ : rows_; }  
+
+  template<typename Rhs>
+  Eigen::Product<AuxMatrix, Rhs,Eigen::AliasFreeProduct>
+  operator*(const Eigen::MatrixBase<Rhs>& x) const {
+    return Eigen::Product<AuxMatrix, Rhs, Eigen::AliasFreeProduct>(*this, x.derived());
+  }
+
+  AuxMatrix transpose() const {
+    AuxMatrix ret{ pmat_A, pvec_R0, !is_transposed, extend_symmetric };
+    return ret;
+  }
+
+  AuxMatrix extend_to_symmetric() const {
+    AuxMatrix ret{ pmat_A, pvec_R0, is_transposed, !extend_symmetric };
+    return ret;
+  }
+
+  bool transposed() const { return this->is_transposed; }
+  bool symmetric() const { return this->extend_symmetric; }
+
+  template<typename Rhs, typename Dest>
+  void MultiplyVector(Dest& r, const Rhs& v) const { 
+    using namespace std;
+    if (symmetric()) {
+      cout << rows() << " " << cols() << " " << cols_ << endl;
+      Eigen::VectorXd temp (cols_);
+      cout << "1" << endl;
+      _r_multiply(temp, v);
+      cout << "2" << endl;
+      _l_multiply(r, temp);
+      cout << "3" << endl;
+    }
+    else if (transposed()) {
+      _r_multiply(r, v);
+    } else {
+      _l_multiply(r, v);
+    }
+  }
+
+protected:
+  template<typename Rhs, typename Dest>
+  void _l_multiply(Dest& r, const Rhs& x) const {
+    assert(x.size() == cols_ && "Incorrect size of input vec");
+    assert(r.size() == rows_ && "Incorrect size of output vec");
+    
+    auto scalar_z = x(0);
+    auto vec_X = x.segment(1, rows_);
+    r.noalias() = *pmat_A * vec_X + *pvec_R0 * scalar_z;
+  }
+
+  template<typename Rhs, typename Dest>
+  void _r_multiply(Dest& r, const Rhs& y) const { 
+    assert(r.size() == cols_ && "Incorrect size of output vec");
+    assert(y.size() == rows_ && "Incorrect size of input vec");
+
+    r(0) = pvec_R0->dot(y);
+    r.segment(1, rows_).noalias() = pmat_A->transpose() * y;
+  }
+  
+
+private:
+  const Index matA_rows;
+  const Index matA_cols;
+  const Index rows_;
+  const Index cols_;
+  const PrimalMatrix* pmat_A;
+  const Eigen::VectorXd* pvec_R0;
+  const bool is_transposed;
+  const bool extend_symmetric;
 };
 
 /**
@@ -220,7 +345,7 @@ template<typename T, typename... U>
 concept IsAnyOf = (std::same_as<T, U> || ...);
 
 template<typename Lhs, typename Rhs>
-requires IsAnyOf<Lhs, PrimalMatrix, PDIPMSubMatrix<PrimalMatrix>>
+requires IsAnyOf<Lhs, PrimalMatrix, AuxMatrix, PDIPMSubMatrix<PrimalMatrix>, PDIPMSubMatrix<AuxMatrix> >
 struct generic_product_impl<Lhs, Rhs, SparseShape, DenseShape> 
  : generic_product_impl_base<Lhs, Rhs, generic_product_impl<Lhs, Rhs> >
 {

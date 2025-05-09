@@ -120,17 +120,11 @@ int main()
   // }
   // cout << endl;
 
-  PrimalMatrix matrix_A { ODmd, Node, Edge, &EdgesMat, &EdgesCap, &ODCap };
+  PrimalMatrix matrixA { ODmd, Node, Edge, &EdgesMat, &EdgesCap, &ODCap };
    
   VectorXd primalV = ReadInit(ODmd, Edge);
-  primalV = primalV * 0.999 + VectorXd::Ones(primalV.size()) * 0.0001;  
-  VectorXd dualY = VectorXd::Zero(matrix_A.rows());
-  // VectorXd::Random(matrix_A.rows()).cwiseAbs() * 0.1 + 0.1 * VectorXd::Ones(matrix_A.rows());
-  VectorXd slackS = primalV.cwiseInverse() * 1e-7;
-  PDIPMSubMatrix<PrimalMatrix> matrix_Sub { &matrix_A, &primalV, &slackS };
-  VectorXd costC = VectorXd::Zero(matrix_A.cols());
-  { costC(0) = 1; } 
-  VectorXd rhsB  = VectorXd::Zero(matrix_A.rows());  
+  primalV = primalV * 0.9 + VectorXd::Ones(primalV.size()) * 0.1; 
+  VectorXd rhsB  = VectorXd::Zero(matrixA.rows());  
   {
     for (int k = 0; k < ODMat.outerSize(); ++k) {
       for (Eigen::SparseMatrix<double>::InnerIterator it(ODMat, k); it; ++it) {
@@ -143,20 +137,44 @@ int main()
       } 
     }
     rhsB.segment((Node)*ODmd, ODmd * Edge).noalias() = VectorXd::Ones(ODmd * Edge);
-  } 
+  }  
 
+  VectorXd auxS = VectorXd::Ones(matrixA.cols() + 1) * 0.1;
+  VectorXd auxC = VectorXd::Zero(matrixA.cols() + 1);
+  auxC(0) = 1;
+  const VectorXd auxR0 = rhsB - matrixA * primalV;
+  VectorXd auxY (matrixA.rows()); 
+  VectorXd auxZX (primalV.size() + 1);
+  auxZX.segment(1, primalV.size()).noalias() = primalV;
+  auxZX(0) = 1;
+  
+  AuxMatrix auxmatA { &matrixA, &auxR0 }; 
 
-  cout << "Dimension Check: " << endl;
-  cout << "Q " << ODmd << "\tM " << Edge << "\tN " << Node << endl;
-  cout << "MatA Size " << matrix_A.rows() << " x " << matrix_A.cols() << "\tShould be " 
-                << (Edge + Node) * ODmd + Edge << " x " << 1 + (2 * ODmd + 1) * Edge << endl;
-  cout << "MatSub    " << matrix_Sub.rows() << " x " << matrix_Sub.cols() << "\tShould be " 
-       << matrix_A.rows() << " square" << endl; 
- 
+  PDIPMSubMatrix<AuxMatrix> matrix_Aux { &auxmatA, &auxZX, &auxS };
+  
   InteriorPointParams p;
-  PrimalDualInteriorPoint<PrimalMatrix> ipm { &matrix_Sub, &rhsB, &costC, p };
+  PrimalDualInteriorPoint<AuxMatrix> ipm { &matrix_Aux, &rhsB, &auxC, p};
+  auto iter = ipm.SolveInPlace(auxZX, auxY, auxS, 1e-9, "../Data/Phase1-try1-"  );
+
+  // VectorXd dualY = VectorXd::Zero(matrix_A.rows());
+  // VectorXd::Random(matrix_A.rows()).cwiseAbs() * 0.1 + 0.1 * VectorXd::Ones(matrix_A.rows());
+  // VectorXd slackS = Eigen::VectorXd::Ones() * 1e-5;
+  // PDIPMSubMatrix<PrimalMatrix> matrix_Sub { &matrix_A, &primalV, &slackS };
+  // VectorXd costC = VectorXd::Zero(matrix_A.cols());
+  // { costC(0) = 1; } 
+
+
+  // cout << "Dimension Check: " << endl;
+  // cout << "Q " << ODmd << "\tM " << Edge << "\tN " << Node << endl;
+  // cout << "MatA Size " << matrix_A.rows() << " x " << matrix_A.cols() << "\tShould be " 
+  //               << (Edge + Node) * ODmd + Edge << " x " << 1 + (2 * ODmd + 1) * Edge << endl;
+  // cout << "MatSub    " << matrix_Sub.rows() << " x " << matrix_Sub.cols() << "\tShould be " 
+  //      << matrix_A.rows() << " square" << endl; 
+ 
+  // InteriorPointParams p;
+  // PrimalDualInteriorPoint<PrimalMatrix> ipm { &matrix_Sub, &rhsB, &costC, p };
   // cout << dualY << endl;   
 
-  auto iter = ipm.SolveInPlace(primalV, dualY, slackS);
+  // auto iter = ipm.SolveInPlace(primalV, dualY, slackS);
   cout << "TOTAL ITER " << iter << endl; 
 }

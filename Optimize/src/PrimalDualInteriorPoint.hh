@@ -54,7 +54,7 @@ public:
   }
 
   int SolveInPlace(ColVec& var, ColVec& dual, ColVec& slack, 
-                    Scalar overall_tol=1e-5) {
+                    Scalar overall_tol=1e-5, std::string fileName="\\") {
     using std::cout, std::endl;
     assert(var.size() == prob_dim && "Var/Matrix have inconsist sizes");
     assert(dual.size() == rhs_dim && "Dual/Matrix have inconsist sizes");
@@ -72,14 +72,18 @@ public:
 
     Scalar curr_mu = var.dot(slack) / prob_dim;
     Scalar alpha = params.CentralPathRho;
-    // {
-    //   AMatSym mat_A_sym { mat_A.transpose() };
-    //   Eigen::ConjugateGradient<PrimalMatrixSymmetric, Eigen::Upper|Eigen::Lower, Eigen::IdentityPreconditioner > cg;
-    //   cg.setMaxIterations(2000).compute(mat_A_sym);
-    //   dual = cg.solve(mat_A.operator*(*pvec_C - slack));
 
-    //   cout << "Dual size " << dual.size() << " matA size" << mat_A.rows() << " x " << mat_A.cols() << endl;
-    // }
+    {
+      cout << "Dual size " << dual.size() << " matA size" << pmat_A->rows() << " x " << pmat_A->cols() << endl;
+      auto symA = pmat_A->extend_to_symmetric();
+      cout << symA.rows() << " " << symA.cols() << endl;
+
+      Eigen::ConjugateGradient<AMat, Eigen::Upper|Eigen::Lower, Eigen::IdentityPreconditioner > cg;
+      cg.setMaxIterations(2000).compute(symA);
+      Eigen::VectorXd rhs = *pmat_A * (*pvec_C - slack);
+      dual = cg.solve(rhs);
+
+    }
 
     do {
       cout << "Iter #" << iteration << "\t" << endl;
@@ -103,8 +107,8 @@ public:
       // cout << "dual   " << pvec_C->transpose() - slack.transpose()-pmat_A->transpose().operator*(dual).transpose() << endl;
       // cout << "slack " << r_comp.transpose() << endl;
 
-      Eigen::BiCGSTAB<PDIPMSubMatrix<AMat>, Eigen::IdentityPreconditioner > cg;
-      // Eigen::ConjugateGradient<PDIPMSubMatrix, Eigen::Upper|Eigen::Lower, Eigen::IdentityPreconditioner > cg;
+      // Eigen::BiCGSTAB<PDIPMSubMatrix<AMat>, Eigen::IdentityPreconditioner > cg;
+      Eigen::ConjugateGradient<PDIPMSubMatrix<AMat>, Eigen::Upper|Eigen::Lower, Eigen::IdentityPreconditioner > cg;
       cg.setMaxIterations(200).compute(*pmat_Eqn);
       d_dual = cg.solve(rhs_dual);
       cout << cg.iterations() << " iter, error = " << cg.error() << endl;
@@ -137,9 +141,8 @@ public:
       cout << "Val " << var(0) << endl;
       if (iteration % 10 == 6) { // save
         cout << "Saving..." << endl;
-        std::string fileName =
-            "../Data/Saved-test-iterOptLog-" + std::to_string(iteration) + ".log";
-        std::ofstream file(fileName);
+        std::string fileName_ = fileName + std::to_string(iteration) + ".log";
+        std::ofstream file(fileName_);
         assert(file.is_open());
         file << var << endl;
         file.close();
